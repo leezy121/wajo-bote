@@ -51,7 +51,7 @@ CH = {
 INFO_CHANNELS = {CH[k] for k in ("announcement", "rules", "warmup", "examples") if CH[k]}
 
 TICKET_PREFIX = (os.getenv("TICKET_PREFIX") or "ticket-").lower()
-QUIET_MINUTES = env_int("QUIET_MINUTES", 30)          # stay quiet in a ticket this long after staff posts
+QUIET_MINUTES = env_int("QUIET_MINUTES", 10)          # after Leez chats in a ticket, only jump in when needed for this long
 NUDGE_HOURS = env_int("NUDGE_HOURS", 48)              # creator hasn't replied to staff for this long -> nudge
 INACTIVE_HOURS = env_int("INACTIVE_HOURS", 72)        # ticket silent this long -> check in
 WARMUP_CHECKIN_HOURS = env_int("WARMUP_CHECKIN_HOURS", 72)
@@ -398,6 +398,26 @@ async def credits_alert():
         traceback.print_exc()
 
 
+RETRY_STATUS = (408, 429, 500, 502, 503, 504)
+
+
+async def post_ai(body, headers):
+    """POST to OpenRouter, retrying network hiccups, rate limits and server errors."""
+    err = "unknown error"
+    for attempt in range(3):
+        try:
+            r = await http.post(OR_URL, json=body, headers=headers, timeout=90)
+        except httpx.HTTPError as e:
+            err = f"network error: {e}"
+        else:
+            if r.status_code not in RETRY_STATUS:
+                return r, None
+            err = f"{r.status_code}: {r.text[:200]}"
+        print(f"[ai] attempt {attempt + 1} failed ({err}), retrying")
+        await asyncio.sleep(2 + attempt * 3)
+    return None, err
+
+
 async def call_ai(dynamic, user_text):
     global _variant
     headers = {"Authorization": f"Bearer {OR_KEY}", "X-Title": "Wajo Assistant"}
@@ -420,10 +440,9 @@ async def call_ai(dynamic, user_text):
             }
             if v == 0 and REASONING_EFFORT not in ("", "none", "off"):
                 body["reasoning"] = {"effort": REASONING_EFFORT}
-            try:
-                r = await http.post(OR_URL, json=body, headers=headers, timeout=90)
-            except httpx.HTTPError as e:
-                last_err = f"network error: {e}"
+            r, err = await post_ai(body, headers)
+            if r is None:
+                last_err = err
                 break
             if r.status_code == 402:
                 await credits_alert()
@@ -495,6 +514,8 @@ bot = discord.Client(
 pending = {}      # debounce tasks
 video_flag = {}   # (channel_id, user_id) -> "ticket" | "outside"
 last_ping = {}    # channel_id -> ts
+staff_chat = {}   # ticket channel_id -> when staff last chatted there (messages to the bot don't count)
+fail_notice = {}  # channel_id -> when we last said the AI glitched
 
 
 def get_guild():
@@ -809,9 +830,12 @@ async def on_message(message):
             if owner:
                 update_creator(owner.id, last_staff_msg_at=now())
             if mentioned:
+                staff_chat.pop(ch.id, None)  # Leez handed this ticket to the bot
                 await safe(handle_staff_request(message, owner))
-            elif owner:
-                schedule(("obs", ch.id), 25, handle_staff_observe(message, owner))
+            else:
+                staff_chat[ch.id] = now()
+                if owner:
+                    schedule(("obs", ch.id), 25, handle_staff_observe(message, owner))
         elif mentioned:
             await safe(handle_staff_request(message, None))
         return
@@ -836,15 +860,24 @@ async def on_message(message):
 
     if not (in_ticket or ch.id == CH["general"] or mentioned):
         return
-    if in_ticket and not mentioned and owner:
-        row = get_creator(owner.id)
-        if row and now() - (row["last_staff_msg_at"] or 0) < QUIET_MINUTES * 60:
-            video_flag.pop(key, None)
-            return  # Leez is active in this ticket, stay out of the way
     if not in_ticket and not mentioned and not message.attachments and TRIVIAL_RE.match(content or "."):
         return
 
-    schedule(key, DEBOUNCE_SECONDS, creator_reply(message, owner, in_ticket, mentioned, key))
+    # Leez chatting in the ticket no longer silences the bot: it just tells the AI to read the room
+    to_staff = replied_to_staff(message)
+    leez_mins = None
+    if in_ticket and not mentioned:
+        since = now() - staff_chat.get(ch.id, 0)
+        if since < QUIET_MINUTES * 60:
+            leez_mins = max(1, int(since // 60))
+    schedule(key, DEBOUNCE_SECONDS, creator_reply(message, owner, in_ticket, mentioned, key, to_staff, leez_mins))
+
+
+def replied_to_staff(message):
+    ref = getattr(message, "reference", None)
+    target = getattr(ref, "resolved", None) if ref else None
+    author = getattr(target, "author", None)
+    return bool(author and not author.bot and is_staff(author))
 
 
 def schedule(key, delay, coro):
@@ -872,7 +905,7 @@ async def safe(coro):
         traceback.print_exc()
 
 
-async def creator_reply(message, owner, in_ticket, mentioned, key):
+async def creator_reply(message, owner, in_ticket, mentioned, key, to_staff=False, leez_mins=None):
     vflag = video_flag.pop(key, None)
     author = message.author
     row = get_creator(author.id)
@@ -882,7 +915,11 @@ async def creator_reply(message, owner, in_ticket, mentioned, key):
         f"A creator, {display(author)}, just messaged in {where}. Their latest message(s) are at the bottom of the chat. Help them.",
     ]
     if in_ticket:
-        situation.append("If their message is clearly meant for Leez and doesn't need you, reply with an empty string or a very short acknowledgement.")
+        situation.append("This is their private ticket. Answer every message they send, even short ones like 'yo', 'u there?' or 'hello?' (those are for you). Don't leave them hanging.")
+        if to_staff:
+            situation.append("They used Discord's reply on one of Leez's messages, so it's aimed at Leez. Still reply if you can help (answer a question, give the next step, confirm what Leez asked). Reply with an empty string ONLY if it's purely for Leez, like 'thanks Leez' or something only Leez can act on.")
+        elif leez_mins:
+            situation.append(f"Leez was chatting in this ticket {leez_mins} min ago. If the creator is clearly just answering Leez and nothing needs you, reply with an empty string. Otherwise reply, without repeating or contradicting Leez.")
     else:
         situation.append("This is a public channel. If it's just creators chatting with each other and nothing needs you, reply with an empty string.")
         if ticket_ch:
@@ -898,7 +935,16 @@ async def creator_reply(message, owner, in_ticket, mentioned, key):
 
     async with message.channel.typing():
         hist = await history_text(message.channel, 14, owner.id if owner else None)
-        reply, actions = await run_ai(situation, hist, row)
+        try:
+            reply, actions = await run_ai(situation, hist, row)
+        except Exception as e:
+            print(f"[ai] failed replying to {display(author)}: {e}")
+            if (in_ticket or mentioned) and now() - fail_notice.get(message.channel.id, 0) > 600:
+                fail_notice[message.channel.id] = now()
+                text = ("I'm offline for a bit, Leez has been told 🙏" if "credits" in str(e)
+                        else "Sorry, I glitched for a sec 😅 send that again in a minute.")
+                await send_reply(message.channel, text, reply_to=message)
+            return
     await apply_actions(actions, "creator", author.id, message.channel)
     if reply:
         await send_reply(message.channel, reply, reply_to=message)
