@@ -317,6 +317,10 @@ Possible actions (use only what's needed; often none):
 {"type": "unpause"}
 {"type": "ping_owner", "reason": "short reason Leez will see"}
 {"type": "save_lesson", "lesson": "something Leez taught you to remember for the future"}
+{"type": "message_creators", "who": ["ticket-0004", "ticket-0012"], "instruction": "what to tell or ask them (each message gets written personally)", "exact_text": "optional: post exactly this instead"}   (only when Leez/staff asks; pick tickets from the CREATOR ROSTER)
+
+## When Leez talks to you outside a ticket
+You get a CREATOR ROSTER with every creator's ticket, stage and when they last replied. Use it to answer things like "who's stuck?" or "who hasn't sent accounts?". If he wants creators pinged or messaged, use message_creators with their ticket names and say in one line who you're messaging (e.g. "On it, pinging the 6 creators who never replied"). You'll post a "Done" summary after.
 """
 
 
@@ -387,15 +391,57 @@ def track_spend(data):
         meta_set("spend_since", now())
 
 
-async def credits_alert():
-    if now() - float(meta_get("credit_alert_at", "0") or 0) < 12 * 3600:
+KEY_HELP = (
+    "⚠️ My OpenRouter key stopped working, so I can't answer creators right now.\n"
+    "Fix: openrouter.ai → Keys → **Create Key** → copy it → Railway → wajo-bote → **Variables** → "
+    "replace `OPENROUTER_API_KEY` → Update Variables. I'll restart and come back on my own."
+)
+CREDITS_HELP = "⚠️ OpenRouter is out of credits, so I can't answer creators right now. Top up here: <https://openrouter.ai/settings/credits>"
+
+
+async def owner_alert(kind, text):
+    """DM Leez about a problem, at most once every 6 hours per kind."""
+    key = f"alert_{kind}_at"
+    if now() - float(meta_get(key, "0") or 0) < 6 * 3600:
         return
-    meta_set("credit_alert_at", now())
+    meta_set(key, now())
     try:
         user = await bot.fetch_user(OWNER_ID)
-        await user.send("⚠️ OpenRouter is out of credits, so I can't answer creators right now. Top up here: <https://openrouter.ai/settings/credits>")
+        await user.send(text)
     except Exception:
         traceback.print_exc()
+
+
+async def credits_alert():
+    await owner_alert("credits", CREDITS_HELP)
+
+
+async def check_key():
+    """Ask OpenRouter about our key. Returns its info, or None if it's broken."""
+    try:
+        r = await http.get("https://openrouter.ai/api/v1/key", headers={"Authorization": f"Bearer {OR_KEY}"}, timeout=20)
+    except httpx.HTTPError as e:
+        print(f"[key] couldn't check the OpenRouter key: {e}")
+        return None
+    if r.status_code in (401, 403):
+        print(f"[key] OpenRouter key is NOT working ({r.status_code}): {r.text[:200]}")
+        await owner_alert("key", KEY_HELP)
+        return None
+    if r.status_code != 200:
+        print(f"[key] key check returned {r.status_code}")
+        return None
+    d = (r.json() or {}).get("data") or {}
+    print(f"[key] OpenRouter key OK: used ${float(d.get('usage') or 0):.4f}, left: {d.get('limit_remaining')}")
+    return d
+
+
+def why_failed(e):
+    s = str(e)
+    if "key" in s:
+        return "my OpenRouter key isn't working (401). Make a new key on openrouter.ai and paste it into Railway → Variables → OPENROUTER_API_KEY."
+    if "credits" in s:
+        return "OpenRouter is out of credits. Top up at openrouter.ai/settings/credits."
+    return f"OpenRouter error: {s[:150]}"
 
 
 RETRY_STATUS = (408, 429, 500, 502, 503, 504)
@@ -447,6 +493,10 @@ async def call_ai(dynamic, user_text):
             if r.status_code == 402:
                 await credits_alert()
                 raise RuntimeError("OpenRouter: out of credits")
+            if r.status_code == 401 or (r.status_code == 403 and "key" in r.text.lower()):
+                print(f"[ai] OpenRouter key rejected: {r.status_code}: {r.text[:200]}")
+                await owner_alert("key", KEY_HELP)
+                raise RuntimeError(f"OpenRouter key not working ({r.status_code})")
             if r.status_code in (400, 422):
                 last_err = f"{r.status_code}: {r.text[:300]}"
                 print(f"[ai] {model} (style {v}) rejected: {last_err}")
@@ -491,14 +541,44 @@ def parse_ai(text):
     return t, []
 
 
-async def run_ai(situation_lines, history, row):
+async def run_ai(situation_lines, history, row, extra=""):
     user_text = (
         f"CHAT (oldest to newest):\n{history}\n\n"
         "SITUATION:\n" + "\n".join(f"- {s}" for s in situation_lines if s)
         + "\n\nRespond with the JSON object only."
     )
-    text = await call_ai(build_dynamic(row), user_text)
+    dynamic = build_dynamic(row) + (f"\n\n{extra}" if extra else "")
+    text = await call_ai(dynamic, user_text)
     return parse_ai(text)
+
+
+def roster_text():
+    """Every creator, their ticket, stage and when they last replied. Given to the AI when Leez talks to it."""
+    g = get_guild()
+    rows = db.execute("SELECT * FROM creators").fetchall()
+    lines, counts, never = [], {}, 0
+    for r in rows:
+        m = g.get_member(r["user_id"]) if g else None
+        if not m or m.bot or is_staff(m):
+            continue
+        ch = bot.get_channel(r["ticket_channel_id"]) if r["ticket_channel_id"] else None
+        counts[r["stage"]] = counts.get(r["stage"], 0) + 1
+        if ch:
+            if not r["last_creator_msg_at"]:
+                never += 1
+            where = f"#{ch.name} (opened {ago(ch.created_at.timestamp())})"
+        else:
+            where = "no ticket"
+        bits = [where, display(m), f"stage {r['stage']}",
+                f"creator last replied {ago(r['last_creator_msg_at'])}", f"Leez last wrote {ago(r['last_staff_msg_at'])}"]
+        if (r["paused_until"] or 0) > now():
+            bits.append(f"on break until {short_date(r['paused_until'])}")
+        lines.append(" | ".join(bits))
+    lines.sort(key=lambda s: (s.startswith("no ticket"), s))
+    summary = ", ".join(f"{k}: {v}" for k, v in sorted(counts.items())) or "none"
+    body = "\n".join(lines[:200]) or "(no creators yet)"
+    return (f"# CREATOR ROSTER ({len(lines)} creators; {summary}; {never} with a ticket who never replied)\n"
+            "'creator last replied never' = they haven't said anything in their ticket since it was opened.\n" + body)
 
 
 # ---------------------------------------------------------------- discord client
@@ -674,11 +754,77 @@ def num(value, default):
 
 ALLOWED = {
     "creator": {"set_stage", "save_accounts", "add_note", "schedule_checkin", "ping_owner"},
-    "staff_request": {"set_stage", "save_accounts", "add_note", "schedule_checkin", "pause", "unpause", "ping_owner", "save_lesson"},
+    "staff_request": {"set_stage", "save_accounts", "add_note", "schedule_checkin", "pause", "unpause", "ping_owner", "save_lesson", "message_creators"},
     "staff_observe": {"set_stage", "save_accounts", "add_note", "schedule_checkin", "pause", "unpause", "save_lesson"},
     "followup": {"add_note", "schedule_checkin", "ping_owner"},
+    "bulk": {"add_note", "schedule_checkin"},
     "catchup": {"set_stage", "save_accounts", "add_note", "schedule_checkin", "pause"},
 }
+
+
+def resolve_creator(item, g):
+    """Turn 'ticket-0004', '0004', '#ticket-0004', a user ID or <@id> into a creator row."""
+    s = str(item).strip()
+    m = re.search(r"\d{15,22}", s)
+    if m:
+        return get_creator(int(m.group(0)))
+    name = s.lstrip("#").strip().lower()
+    if re.fullmatch(r"\d{1,5}", name):
+        name = f"{TICKET_PREFIX}{name.zfill(4)}"
+    for ch in (g.text_channels if g else []):
+        if ch.name.lower() == name:
+            return creator_by_ticket(ch.id)
+    return None
+
+
+async def bulk_message(items, instruction, exact, report_ch):
+    """Message several creators in their own tickets (Leez's request)."""
+    g = get_guild()
+    done, skipped, seen = [], [], set()
+    for item in list(items)[:60]:
+        row = resolve_creator(item, g)
+        if not row or row["user_id"] in seen:
+            skipped.append(str(item))
+            continue
+        seen.add(row["user_id"])
+        ticket = bot.get_channel(row["ticket_channel_id"]) if row["ticket_channel_id"] else None
+        member = g.get_member(row["user_id"]) if g else None
+        if not ticket or not member:
+            skipped.append(str(item))
+            continue
+        try:
+            if exact:
+                await send_reply(ticket, exact, mention_id=member.id)
+            else:
+                situation = [
+                    f"Leez asked you to message {display(member)} in their ticket. His instruction: {instruction or 'check in and get them to their next step'}",
+                    "Read their chat and memory, then write a short, personal message to them (they'll be tagged). Follow Leez's instruction and fit it to their current step.",
+                ]
+                hist = await history_text(ticket, 12, member.id)
+                reply, actions = await run_ai(situation, hist, row)
+                await apply_actions(actions, "bulk", member.id, ticket)
+                if not reply:
+                    skipped.append(ticket.name)
+                    continue
+                await send_reply(ticket, reply, mention_id=member.id)
+            update_creator(member.id, last_bot_nudge_at=now())
+            done.append(ticket.name)
+        except Exception as e:
+            traceback.print_exc()
+            skipped.append(ticket.name)
+            if "key" in str(e) or "credits" in str(e):
+                break
+        await asyncio.sleep(1.5)
+    if report_ch:
+        msg = f"Done ✅ messaged {len(done)} creator(s)"
+        if done:
+            msg += ": " + ", ".join(done[:25]) + (" …" if len(done) > 25 else "")
+        if skipped:
+            msg += f"\nSkipped {len(skipped)}: " + ", ".join(skipped[:15])
+        try:
+            await report_ch.send(msg[:1900], allowed_mentions=discord.AllowedMentions.none())
+        except discord.HTTPException:
+            pass
 
 
 async def apply_actions(actions, mode, creator_id, channel):
@@ -695,6 +841,14 @@ async def apply_actions(actions, mode, creator_id, channel):
                 continue
             if t == "save_lesson":
                 add_lesson(str(a.get("lesson") or ""))
+                continue
+            if t == "message_creators":
+                who = a.get("who") or []
+                if isinstance(who, (str, int)):
+                    who = [who]
+                if who:
+                    asyncio.create_task(safe(bulk_message(
+                        who, str(a.get("instruction") or ""), str(a.get("exact_text") or "").strip(), channel)))
                 continue
             if not creator_id or not get_creator(creator_id):
                 continue
@@ -941,7 +1095,7 @@ async def creator_reply(message, owner, in_ticket, mentioned, key, to_staff=Fals
             print(f"[ai] failed replying to {display(author)}: {e}")
             if (in_ticket or mentioned) and now() - fail_notice.get(message.channel.id, 0) > 600:
                 fail_notice[message.channel.id] = now()
-                text = ("I'm offline for a bit, Leez has been told 🙏" if "credits" in str(e)
+                text = ("I'm offline for a bit, Leez has been told 🙏" if ("credits" in str(e) or "key" in str(e))
                         else "Sorry, I glitched for a sec 😅 send that again in a minute.")
                 await send_reply(message.channel, text, reply_to=message)
             return
@@ -964,12 +1118,18 @@ async def handle_staff_request(message, owner):
     if target:
         situation.append(f"It's about the creator {display(target)}. Write your reply TO the creator (they'll be tagged), as if you're talking to them. Update their memory with actions if the instruction changes their status.")
     else:
-        situation.append("Reply to them directly, short.")
+        situation.append("Reply to them directly, short. You CAN see every creator: use the CREATOR ROSTER. If they want creators messaged or pinged in their tickets, use message_creators with the ticket names, and say in one line who you're messaging.")
     situation.append("If they're teaching you something for the future (a fact, a rule, a correction, new scripts or examples), use save_lesson so you remember it, and confirm in a few words.")
 
     async with message.channel.typing():
         hist = await history_text(message.channel, 14, target.id if target else None)
-        reply, actions = await run_ai(situation, hist, get_creator(target.id) if target else None)
+        try:
+            reply, actions = await run_ai(situation, hist, get_creator(target.id) if target else None,
+                                          extra=roster_text() if not target else "")
+        except Exception as e:
+            print(f"[ai] staff request failed: {e}")
+            await send_reply(message.channel, f"⚠️ I can't think right now: {why_failed(e)}", reply_to=message)
+            return
     await apply_actions(actions, "staff_request", target.id if target else None, message.channel)
     if reply:
         if target:
@@ -1129,6 +1289,7 @@ async def on_ready():
     await refresh_info()
 
     async def boot():
+        await safe(check_key())
         try:
             await startup_scan()
         except Exception:
@@ -1150,8 +1311,8 @@ HELP = """**Wajo Assistant commands** (staff only)
 `!note @creator <text>` : add a note
 `!learn <text>` : teach me something · `!lessons` : list them · `!forget <id>` : delete one
 `!refresh` : re-read the info channels now
-`!spend` : AI spend so far
-Or just tag me and tell me what to do (DMs work too)."""
+`!spend` : AI spend so far + whether my OpenRouter key works
+Or just tag me and tell me what to do, from any channel or DM (e.g. "ping everyone who hasn't replied since making a ticket")."""
 
 
 async def handle_command(message):
@@ -1187,7 +1348,14 @@ async def handle_command(message):
         calls = int(meta_get("calls_total", "0") or 0)
         since = meta_get("spend_since")
         since_txt = f" since {short_date(float(since))}" if since else ""
-        await ch.send(f"AI spend: ${total:.4f} over {calls} calls{since_txt}.")
+        info = await check_key()
+        if info is None:
+            key_txt = "\n⚠️ My OpenRouter key isn't working right now. Make a new one and put it in Railway → Variables."
+        elif info.get("limit_remaining") is not None:
+            key_txt = f"\nKey credit left: ${float(info['limit_remaining']):.2f}"
+        else:
+            key_txt = "\nKey is working ✅"
+        await ch.send(f"AI spend: ${total:.4f} over {calls} calls{since_txt}.{key_txt}")
     elif cmd in ("!status", "!stage", "!pause", "!unpause", "!checkin", "!note"):
         if not target:
             await ch.send(f"Tag the creator, e.g. `{cmd} @name`")
