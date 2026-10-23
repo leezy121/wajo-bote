@@ -9,15 +9,15 @@
 
 ## Pay
 - **$4 per 1,000 views.**
-- Views are tracked automatically on the creator platform: <https://creators-shownmedia.com/>. Payment goes through that platform too.
-- Every creator MUST make an account on creators-shownmedia.com and apply to the **Wajo UGC** campaign there. That's where they see the campaign, where their views get tracked, and how they get paid.
-- Anything specific (missing payment, payout dates, view count problems, minimums, caps) → tag Leez. Don't guess.
+- Views are tracked automatically. Current creators are already set up for tracking and payment.
+- The campaign is CLOSED to new applicants. Never send the Shown Media creator site link and never tell anyone to sign up or apply there.
+- Anything specific (missing payment, payout dates, view count problems, minimums, caps, Shown Media questions) → tag Leez. Don't guess.
 
 ## Rules
 - One video a day, posted on all 3: TikTok, Instagram and YouTube Shorts.
 - Can't post on a day? Tell Leez BEFORE, with a reason, or you can be removed from the campaign.
 - Every video must go to Leez for review first: send the video file or a Google Drive link in your ticket. Don't post until Leez approves. (This replaces the brief's line saying you don't need approval.)
-- After posting: share the live links in your ticket and add them to your creator profile on creators-shownmedia.com.
+- After posting: share the live links in your ticket.
 - Use brand-new, separate Wajo-focused accounts on TikTok, Instagram and YouTube. Not personal accounts.
 - Leez tells you which CTA to use for each video.
 - If the brief says to ask Ahmed about something, ask Leez instead. Leez handles everything in this server.
@@ -25,11 +25,10 @@
 ## Steps for every creator
 1. Read the full brief in #announcement.
 2. Open a ticket in #create-ticket.
-3. Sign up at creators-shownmedia.com and apply to the Wajo UGC campaign there.
-4. Make 3 new Wajo accounts (TikTok, Instagram as a Creator account, YouTube for Shorts). Use a fresh email and set the app language to English (US). Send the @handles in your ticket so Leez can confirm them.
-5. After Leez confirms: warm up for 2–3 days following #account-warmup.
-6. Pick a concept from the brief (or copy the example account in #example-videos), film it, and send it in your ticket for review.
-7. Once approved, post on all 3 accounts, share the links, and keep going daily.
+3. Make 3 new Wajo accounts (TikTok, Instagram as a Creator account, YouTube for Shorts). Use a fresh email and set the app language to English (US). Send the @handles in your ticket so Leez can confirm them.
+4. After Leez confirms: warm up for 2–3 days following #account-warmup.
+5. Pick a concept from the brief (or copy the example account in #example-videos), film it, and send it in your ticket for review.
+6. Once approved, post on all 3 accounts, share the links, and keep going daily.
 
 ## Example videos
 - #example-videos has an account from a similar campaign (Airtap, which is also an iMessage AI assistant): <https://www.instagram.com/chillwithsarahms>
