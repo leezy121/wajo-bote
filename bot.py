@@ -3,7 +3,7 @@ Wajo Assistant: Discord bot for the Wajo UGC campaign.
 
 What it does
 - Welcomes new members in #general-chat and points them to #announcement + #create-ticket
-- Onboards creators in their ticket: brief + creators-shownmedia.com signup -> new accounts -> warm-up -> filming
+- Onboards creators in their ticket: brief -> new accounts -> warm-up -> filming (no Shown Media sign-ups: campaign is closed to new applicants)
 - Answers questions from the brief (AI via OpenRouter), short and human
 - Tags Leez when a video/Drive link is submitted, when accounts need confirming, or when things get serious
 - Remembers each creator (stage, accounts, notes, breaks) and follows up in tickets
@@ -51,28 +51,29 @@ CH = {
 INFO_CHANNELS = {CH[k] for k in ("announcement", "rules", "warmup", "examples") if CH[k]}
 
 TICKET_PREFIX = (os.getenv("TICKET_PREFIX") or "ticket-").lower()
+# Campaign closed to new creators: tickets opened after this moment (and new joiners) are ignored.
+CLOSED_AT = datetime.fromisoformat(os.getenv("CAMPAIGN_CLOSED_AT") or "2026-10-23T20:16:00+00:00").timestamp()
 QUIET_MINUTES = env_int("QUIET_MINUTES", 10)          # after Leez chats in a ticket, only jump in when needed for this long
 NUDGE_HOURS = env_int("NUDGE_HOURS", 48)              # creator hasn't replied to staff for this long -> nudge
 INACTIVE_HOURS = env_int("INACTIVE_HOURS", 72)        # ticket silent this long -> check in
 WARMUP_CHECKIN_HOURS = env_int("WARMUP_CHECKIN_HOURS", 72)
 DEBOUNCE_SECONDS = float(os.getenv("DEBOUNCE_SECONDS") or 4)
 
-SHOWN_URL = "https://creators-shownmedia.com/"
 OR_URL = "https://openrouter.ai/api/v1/chat/completions"
 LAGOS = timezone(timedelta(hours=1))
 
 STAGES = {
     "new": "joined the server, no ticket yet",
-    "brief_pending": "has a ticket; hasn't yet confirmed reading the full brief AND signing up on creators-shownmedia.com",
+    "brief_pending": "has a ticket; hasn't yet confirmed reading the full brief",
     "brief_read": "confirmed brief + signup; needs to create 3 new accounts and send the handles",
     "accounts_sent": "sent their accounts; waiting for Leez to confirm them",
     "warming": "Leez confirmed the accounts; warming up for 2-3 days",
     "posting": "warm-up done; filming, sending videos to Leez for review, posting daily",
 }
 AUTO_CHECKIN = {
-    "brief_pending": (24, "Check they've read the full brief and signed up on creators-shownmedia.com + applied to the Wajo UGC campaign"),
-    "brief_read": (36, "Check they've made the 3 new accounts (TikTok, Instagram, YouTube) and remind them to send the handles in the ticket"),
-    "warming": (WARMUP_CHECKIN_HOURS, "Day-3 warm-up check: ask how warm-up went, if their feed is mostly niche now, and get them filming + sending their first video for review"),
+    "brief_pending": (24, "Quick status check: ask how they're getting on"),
+    "brief_read": (36, "Quick status check: ask how the new accounts are coming along"),
+    "warming": (WARMUP_CHECKIN_HOURS, "Day-3 status check: ask how warm-up is going and if they're ready to film"),
 }
 
 
@@ -229,6 +230,24 @@ def is_ticket(channel):
     return isinstance(channel, discord.TextChannel) and channel.name.lower().startswith(TICKET_PREFIX)
 
 
+def campaign_closed():
+    return now() >= CLOSED_AT
+
+
+def is_active_ticket(channel):
+    """A current creator's ticket: one opened before the campaign closed to new creators."""
+    return is_ticket(channel) and channel.created_at.timestamp() < CLOSED_AT
+
+
+def active_creator(uid):
+    """The creator's row if they're a current creator (have a pre-close ticket), else None."""
+    row = get_creator(uid)
+    if not row or not row["ticket_channel_id"]:
+        return None
+    ch = bot.get_channel(row["ticket_channel_id"])
+    return row if ch is not None and is_active_ticket(ch) else None
+
+
 VIDEO_EXT = (".mp4", ".mov", ".m4v", ".webm", ".avi", ".mkv", ".3gp")
 VIDEO_LINK_RE = re.compile(
     r"(drive\.google\.com|docs\.google\.com/file|dropbox\.com|wetransfer\.com|we\.tl/|streamable\.com|loom\.com|icloud\.com|frame\.io)",
@@ -286,13 +305,19 @@ RULES_TEXT = """You are the assistant for the Wajo UGC campaign in the "Wajo Ugc
 
 ## The creator journey (stages)
 Move each creator forward one step at a time. Check their stage in CREATOR MEMORY.
-1. new : no ticket yet. Tell them to read the brief in [[ANN]] and open a ticket in [[CT]].
-2. brief_pending : in their ticket, get them to (a) read the WHOLE brief and (b) sign up at https://creators-shownmedia.com/ and apply to the Wajo UGC campaign there. Explain why: it's the creator platform where they find the campaign, it tracks their views automatically, and it's how they get paid. When they confirm BOTH -> set_stage brief_read and give them step 3 in the same reply.
+You only work with the CURRENT creators (people who already have a ticket). The campaign is not taking new creators: never onboard anyone new, never tell anyone to open a ticket, and never give onboarding steps to someone without a ticket.
+1. new : (not used anymore; new people are ignored)
+2. brief_pending : in their ticket, get them to read the WHOLE brief. When they confirm -> set_stage brief_read and give them step 3 in the same reply.
 3. brief_read : they make 3 brand-new, separate Wajo-focused accounts: TikTok, Instagram (Creator account) and YouTube (for Shorts). Fresh email, app language English (US). They send the @handles or links in their ticket. When they do -> save_accounts + set_stage accounts_sent + ping_owner (e.g. "accounts ready to confirm"). Tell them Leez will check them and to read [[WARM]] while they wait. Don't tell them to start warming up yet.
 4. accounts_sent : waiting on Leez. Keep them reading [[WARM]] and the brief. Only Leez confirms accounts.
 5. warming : Leez confirmed. They warm up for 2-3 days following [[WARM]], then pick a concept and film. If they've been warming 2+ days and say they're done, set_stage posting.
-6. posting : they film, SEND each video (file or Google Drive link) in their ticket for Leez to review, and only post after Leez approves. Then they post on all 3 accounts, share the live links in the ticket and on their creators-shownmedia.com profile. One video a day. If they can't post on a day, they tell Leez BEFORE.
+6. posting : they film, SEND each video (file or Google Drive link) in their ticket for Leez to review, and only post after Leez approves. Then they post on all 3 accounts and share the live links in their ticket. One video a day. If they can't post on a day, they tell Leez BEFORE.
 If they jump ahead, answer quickly and steer them back to their current step.
+
+## Shown Media: campaign is CLOSED to new applicants
+- NEVER share creators-shownmedia.com or any Shown Media link, and never tell anyone to sign up, join or apply to the campaign there. The client doesn't want anyone else applying.
+- The current creators are already set up. If someone asks about Shown Media, signing up, applying or joining the campaign, say there's nothing they need to do there and ping Leez if it needs an answer.
+- Follow-ups and check-ins are just a short status check: ask how they're doing / where they're at and if they need help. Don't re-explain onboarding or mention joining anything.
 
 ## Ping Leez (ping_owner) when
 - accounts are sent for confirmation
@@ -562,19 +587,18 @@ def roster_text():
         if not m or m.bot or is_staff(m):
             continue
         ch = bot.get_channel(r["ticket_channel_id"]) if r["ticket_channel_id"] else None
+        if not ch or not is_active_ticket(ch):
+            continue  # only current creators (people without a ticket / new tickets are ignored)
         counts[r["stage"]] = counts.get(r["stage"], 0) + 1
-        if ch:
-            if not r["last_creator_msg_at"]:
-                never += 1
-            where = f"#{ch.name} (opened {ago(ch.created_at.timestamp())})"
-        else:
-            where = "no ticket"
+        if not r["last_creator_msg_at"]:
+            never += 1
+        where = f"#{ch.name} (opened {ago(ch.created_at.timestamp())})"
         bits = [where, display(m), f"stage {r['stage']}",
                 f"creator last replied {ago(r['last_creator_msg_at'])}", f"Leez last wrote {ago(r['last_staff_msg_at'])}"]
         if (r["paused_until"] or 0) > now():
             bits.append(f"on break until {short_date(r['paused_until'])}")
         lines.append(" | ".join(bits))
-    lines.sort(key=lambda s: (s.startswith("no ticket"), s))
+    lines.sort()
     summary = ", ".join(f"{k}: {v}" for k, v in sorted(counts.items())) or "none"
     body = "\n".join(lines[:200]) or "(no creators yet)"
     return (f"# CREATOR ROSTER ({len(lines)} creators; {summary}; {never} with a ticket who never replied)\n"
@@ -797,8 +821,8 @@ async def bulk_message(items, instruction, exact, report_ch):
                 await send_reply(ticket, exact, mention_id=member.id)
             else:
                 situation = [
-                    f"Leez asked you to message {display(member)} in their ticket. His instruction: {instruction or 'check in and get them to their next step'}",
-                    "Read their chat and memory, then write a short, personal message to them (they'll be tagged). Follow Leez's instruction and fit it to their current step.",
+                    f"Leez asked you to message {display(member)} in their ticket. His instruction: {instruction or 'ask how things are going and where they are at'}",
+                    "Read their chat and memory, then write a short, personal message to them (they'll be tagged). Follow Leez's instruction. Never mention Shown Media or signing up/applying.",
                 ]
                 hist = await history_text(ticket, 12, member.id)
                 reply, actions = await run_ai(situation, hist, row)
@@ -886,17 +910,14 @@ def welcome_text(uid):
     return (
         f"Welcome <@{uid}>! 👋 Glad you're here.\n"
         f"1️⃣ Read the full brief in {tag('announcement')}\n"
-        f"2️⃣ Open your ticket in {tag('create_ticket')} and I'll walk you through the rest\n"
-        f"Also sign up at <{SHOWN_URL}> and join the **Wajo UGC** campaign there. That's where your views get tracked and how you get paid 💸"
+        f"2️⃣ Open your ticket in {tag('create_ticket')} and I'll walk you through the rest"
     )
 
 
 def ticket_intro(uid):
     return (
-        f"Hey <@{uid}> 👋 welcome to your ticket! Two things first:\n"
-        f"1. Read the **whole** brief in {tag('announcement')}\n"
-        f"2. Sign up at <{SHOWN_URL}> and apply to the **Wajo UGC** campaign there (it tracks your views and pays you, $4 per 1,000 views)\n"
-        f"Reply here once you've done both and I'll give you the next step. Questions? Just ask."
+        f"Hey <@{uid}> 👋 welcome to your ticket! First, read the **whole** brief in {tag('announcement')}.\n"
+        f"Reply here once you're done and I'll give you the next step. Questions? Just ask."
     )
 
 
@@ -904,6 +925,8 @@ def ticket_intro(uid):
 async def on_member_join(member):
     if member.bot or (SERVER_ID and member.guild.id != SERVER_ID):
         return
+    if campaign_closed():
+        return  # not taking new creators: no welcome, no steps
     ensure_creator(member)
     update_creator(member.id, joined_at=now(), name=display(member))
     ch = bot.get_channel(CH["general"]) if CH["general"] else None
@@ -916,8 +939,8 @@ async def on_member_join(member):
 
 @bot.event
 async def on_guild_channel_create(channel):
-    if not is_ticket(channel):
-        return
+    if not is_active_ticket(channel):
+        return  # new tickets after the campaign closed: do nothing
     owner = None
     for wait in (4, 6):
         await asyncio.sleep(wait)
@@ -979,7 +1002,11 @@ async def on_message(message):
             return
         if ch.id in INFO_CHANNELS:
             asyncio.create_task(safe(refresh_info()))
-        if is_ticket(ch):
+        if is_ticket(ch) and not is_active_ticket(ch):
+            # a new creator's ticket: only act if Leez explicitly tags the bot
+            if mentioned:
+                await safe(handle_staff_request(message, await find_ticket_owner(ch)))
+        elif is_ticket(ch):
             owner = await find_ticket_owner(ch)
             if owner:
                 update_creator(owner.id, last_staff_msg_at=now())
@@ -994,9 +1021,12 @@ async def on_message(message):
             await safe(handle_staff_request(message, None))
         return
 
-    # ---- creators
-    ensure_creator(message.author)
+    # ---- creators: only current creators (pre-close ticket). New people / no ticket = ignored.
     in_ticket = is_ticket(ch)
+    if in_ticket and not is_active_ticket(ch):
+        return
+    if not in_ticket and not active_creator(message.author.id):
+        return
     owner = await find_ticket_owner(ch) if in_ticket else None
     if owner and owner.id == message.author.id:
         update_creator(owner.id, last_creator_msg_at=now())
@@ -1077,9 +1107,7 @@ async def creator_reply(message, owner, in_ticket, mentioned, key, to_staff=Fals
     else:
         situation.append("This is a public channel. If it's just creators chatting with each other and nothing needs you, reply with an empty string.")
         if ticket_ch:
-            situation.append(f"They already have a ticket: <#{ticket_ch.id}>. Personal stuff (accounts, videos, problems) goes there.")
-        else:
-            situation.append(f"They DON'T have a ticket yet. Tell them to read the brief in {tag('announcement')} and open one in {tag('create_ticket')}.")
+            situation.append(f"Their ticket is <#{ticket_ch.id}>. Personal stuff (accounts, videos, problems) goes there.")
     if vflag == "ticket":
         situation.append("They just submitted a video or link. Leez has ALREADY been tagged to review it, so don't ping_owner for it. Tell them it's with Leez and NOT to post until he approves. Answer anything else they asked.")
     elif vflag == "outside":
@@ -1177,17 +1205,11 @@ async def check_creator(row, g):
         return
 
     if not row["ticket_channel_id"]:
-        # joined but never opened a ticket -> one reminder after a day
-        if row["stage"] == "new" and not row["ticket_reminded"] and t - (row["joined_at"] or t) > 24 * 3600:
-            ch = bot.get_channel(CH["general"]) if CH["general"] else None
-            if ch:
-                await ch.send(f"Hey <@{member.id}> 👋 don't forget to open your ticket in {tag('create_ticket')} so we can get you started on the Wajo campaign!")
-            update_creator(member.id, ticket_reminded=1)
-        return
+        return  # never ping people who haven't made a ticket
 
     ticket = bot.get_channel(row["ticket_channel_id"])
-    if not ticket or not is_ticket(ticket):
-        return
+    if not ticket or not is_active_ticket(ticket):
+        return  # only follow up with current creators
     if (row["paused_until"] or 0) > t:
         return
     if t - (row["last_bot_nudge_at"] or 0) < 20 * 3600:
@@ -1201,11 +1223,11 @@ async def check_creator(row, g):
             and t - row["last_staff_msg_at"] >= NUDGE_HOURS * 3600 \
             and (row["last_bot_nudge_at"] or 0) < row["last_staff_msg_at"]:
         days = max(2, int((t - row["last_staff_msg_at"]) / 86400))
-        reason = f"They haven't replied to Leez's last message in about {days} days. Nudge them to reply or continue with what Leez asked, and invite questions."
+        reason = f"They haven't replied to Leez's last message in about {days} days. Ask how things are going and nudge them to reply to Leez."
     else:
         last = max(row["last_creator_msg_at"] or 0, row["last_staff_msg_at"] or 0, row["last_bot_nudge_at"] or 0, row["stage_since"] or 0)
         if row["stage"] not in ("new", "accounts_sent") and t - last >= INACTIVE_HOURS * 3600:
-            reason = "This ticket has been quiet for 3+ days. Check in on their progress for their current step."
+            reason = "This ticket has been quiet for 3+ days. Ask how things are going and what their current status is."
     if not reason:
         return
 
@@ -1216,7 +1238,7 @@ async def check_creator(row, g):
 
     situation = [
         f"Automatic check on {display(member)} (ticket owner). Reason: {reason}",
-        "Read the chat first. If a check-in makes sense, write a short, friendly nudge (they'll be tagged): how's it going, their next step, and invite questions.",
+        "Read the chat first. If a check-in makes sense, write a short, friendly status check (they'll be tagged): ask how it's going / where they're at and if they need help. Keep it to 1-2 lines. Don't re-explain onboarding steps and never mention Shown Media, signing up or applying.",
         "If it doesn't make sense right now (Leez gave them a break or more time, Leez is already handling it, they just updated, or they're waiting on Leez), reply with an empty string. You can schedule_checkin for a better time.",
     ]
     hist = await history_text(ticket, 16, member.id)
@@ -1242,7 +1264,7 @@ async def startup_scan():
             ensure_creator(m, reminded=1, joined_at=m.joined_at.timestamp() if m.joined_at else None)
     # learn the tickets that already exist
     for ch in g.text_channels:
-        if not is_ticket(ch):
+        if not is_active_ticket(ch):
             continue
         known = creator_by_ticket(ch.id)
         owner = await find_ticket_owner(ch)
