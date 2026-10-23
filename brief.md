@@ -488,6 +488,6 @@ If you want the tools and prompt, comment 'Medeo' and I'll send you the link."
 - Wajo and Fo are spelled correctly.
 - You used the CTA given in Discord.
 - You posted to your Wajo pages.
-- You shared the live links in your creator profile on the Shown website.
+- You shared the live links in your ticket.
 
 Website: wajo.ai · Instagram: @wajo_ai
