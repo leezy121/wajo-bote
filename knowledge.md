@@ -7,11 +7,12 @@
 - Creators sign into <https://wajo.ai/> and connect it to their iPhone so they can use Fo in iMessage.
 - All videos target **American audiences**: US places, dollars and US businesses.
 
-## Pay
-- **$4 per 1,000 views.**
-- Views are tracked automatically. Current creators are already set up for tracking and payment.
-- The campaign is CLOSED to new applicants. Never send the Shown Media creator site link and never tell anyone to sign up or apply there.
-- Anything specific (missing payment, payout dates, view count problems, minimums, caps, Shown Media questions) → tag Leez. Don't guess.
+## Pay (two deals: always check the creator's "Pay deal" in CREATOR MEMORY)
+- **New creators** (joined the server from Oct 27): **$10 for every post that reaches 1,000 views.** They share live links in their ticket.
+- **Original creators** (in the campaign before Oct 23): **$4 per 1,000 views**, tracked automatically. They're already set up.
+- Only tell a creator their own deal. Never compare the two.
+- Never send the Shown Media creator site link and never tell anyone to sign up or apply there.
+- Anything specific (which platforms count, payout dates or method, proof of views, minimums, caps, Shown Media questions) → tag Leez. Don't guess.
 
 ## Rules
 - One video a day, posted on all 3: TikTok, Instagram and YouTube Shorts.
