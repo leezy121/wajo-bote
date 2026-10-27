@@ -413,6 +413,7 @@ If they jump ahead, answer quickly and steer them back to their current step.
 - NEW creators (joined the server from Oct 27): [[NEWPAY]].
 - ORIGINAL creators (in the campaign before Oct 23): [[OLDPAY]].
 - Only ever tell a creator THEIR deal. Never mention the other deal or compare them.
+- Only talk about pay inside the creator's private ticket. NEVER mention pay amounts in public channels like [[GEN]]: if asked there, say you'll go over it in their ticket.
 - Anything you don't know (which platforms count, when or how they get paid, view proof, minimums) -> say you'll check with Leez and ping_owner. Don't guess or promise.
 
 ## Shown Media: no sign-ups
@@ -1767,7 +1768,6 @@ async def execute_deletes(p, report_ch):
 def welcome_text(uid):
     return (
         f"Welcome <@{uid}>! 👋 Glad you're here.\n"
-        f"You'll earn **{NEW_PAY}** 💸\n"
         f"1️⃣ Read the full brief in {tag('announcement')}\n"
         f"2️⃣ Open your ticket in {tag('create_ticket')} and I'll walk you through the rest"
     )
@@ -2008,6 +2008,7 @@ async def creator_reply(message, owner, in_ticket, mentioned, key, to_staff=Fals
             situation.append(f"Leez was chatting in this ticket {leez_mins} min ago. If the creator is clearly just answering Leez and nothing needs you, reply with an empty string. Otherwise reply, without repeating or contradicting Leez.")
     else:
         situation.append("This is a public channel. If it's just creators chatting with each other and nothing needs you, reply with an empty string.")
+        situation.append("Everyone can read this channel: do NOT mention any pay amounts or deals here. If they ask about pay, say you'll go over it in their ticket.")
         if ticket_ch:
             situation.append(f"Their ticket is <#{ticket_ch.id}>. Personal stuff (accounts, videos, problems) goes there.")
         else:
